@@ -9,14 +9,6 @@ use stm32f4::stm32f401;
 const BAUD_RATE: u32 = 115_200;
 const CLK_HZ: u32 = 16_000_000;
 
-/*
-    Issues:
-    * Display only seems to accept pixel data after calling INVON or INVOFF first.
-    * Color mode is not being set to 16-bit RGB correcly. Currently 24-bit RGB
-    * Disabling CS right after writing a command seems to cause the command to be dropped.
-        Shouldn't happen because we wait for busy bit in spi driver
-*/
-
 fn spi1_write(spi1: &stm32f401::SPI1, byte: u8) {
     // Wait for TX buffer to be empty
     while spi1.sr.read().txe().bit_is_clear() {}
@@ -103,6 +95,7 @@ fn fill_display(
     const CASET: u8 = 0x2A;
     const RASET: u8 = 0x2B;
     const RAMWR: u8 = 0x2C;
+    const NOP: u8 = 0x00;
 
     const WHITE: u32 = 0xFFFFFF;
 
@@ -110,9 +103,9 @@ fn fill_display(
 
     display_cs_enable(gpioa);
 
-    // TODO: Fails without this... why?
+    // Draw sequence fails without this
     display_rs_command_mode(gpioa);
-    spi1_write(spi1, 0x20); // INVOFF
+    spi1_write(spi1, NOP);
 
     // Set column range
     display_rs_command_mode(gpioa);
@@ -160,10 +153,9 @@ fn calibrate_display(
 ) {
     const SWRESET: u8 = 0x01;
     const SLPOUT: u8 = 0x11;
-    const COLMOD: u8 = 0x3A;
     const DISPON: u8 = 0x29;
 
-    const COLOUR_16_BIT_MODE: u8 = 0x05;
+    // TODO: COLMOD 16-bit RGB with a display that supports it
 
     display_cs_enable(gpioa);
 
@@ -175,11 +167,6 @@ fn calibrate_display(
     // Wake up display (from reset sleep)
     spi1_write(spi1, SLPOUT);
     asm::delay(CLK_HZ / 1000 * 120); // ~120ms
-
-    // Set color mode
-    spi1_write(spi1, COLMOD);
-    display_rs_data_mode(gpioa);
-    spi1_write(spi1, COLOUR_16_BIT_MODE);
 
     // Turn on the display
     display_rs_command_mode(gpioa);
@@ -275,7 +262,8 @@ fn configure_st7735_display(
 
     calibrate_display(gpioa, spi1);
 
-    fill_display(gpioa, spi1, None); // TODO: move this
+    // Clear display
+    fill_display(gpioa, spi1, None);
 }
 
 fn configure_microsd_interface() {
