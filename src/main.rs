@@ -1,13 +1,17 @@
 #![no_std]
 #![no_main]
 
+mod constants;
+mod usart_debugger;
+
+use core::fmt::Write;
 use cortex_m::asm;
 use cortex_m_rt::entry;
 use panic_halt as _;
 use stm32f4::stm32f401;
 
-const BAUD_RATE: u32 = 115_200;
-const CLK_HZ: u32 = 16_000_000;
+use constants::CLK_HZ;
+use usart_debugger::UsartDebugger;
 
 fn spi1_write(spi1: &stm32f401::SPI1, byte: u8) {
     // Wait for TX buffer to be empty
@@ -17,46 +21,6 @@ fn spi1_write(spi1: &stm32f401::SPI1, byte: u8) {
 
     // Wait for SPI to be busy (TX started)
     while spi1.sr.read().bsy().bit_is_set() {}
-}
-
-fn debug_print(usart2: &stm32f401::USART2, s: &str) {
-
-    for byte in s.bytes() {
-        // Wait for TX buffer to be empty
-        while usart2.sr.read().txe().bit_is_clear() {}
-
-        usart2.dr.write(|w| unsafe { w.bits(byte.into()) });
-    }
-}
-
-fn configure_usart2_debugger(
-    rcc : &stm32f401::RCC,
-    gpioa : &stm32f401::GPIOA,
-    usart2 : &stm32f401::USART2
-) {
-    /*
-        USART over USB
-
-        CON|PIN|NOTE
-        ==================
-        TX |PA2|USART2_TX
-    */
-
-    // Enable GPIOA clock
-    rcc.ahb1enr.modify(|_, w| w.gpioaen().enabled());
-
-    // Configure TX pin to use an alternate function
-    gpioa.moder.modify(|_, w| w.moder2().alternate());
-
-    // Set PA2 to use USART2_TX
-    gpioa.afrl.modify(|_, w| w.afrl2().af7());
-
-    // Enable USART2 clock
-    rcc.apb1enr.modify(|_, w| w.usart2en().enabled());
-
-    // Set baud rate and enable USART2 Tx
-    usart2.brr.write(|w| unsafe { w.bits(CLK_HZ/BAUD_RATE) });
-    usart2.cr1.modify(|_, w| w.ue().enabled().te().enabled());
 }
 
 // TODO: Display module
@@ -316,10 +280,9 @@ fn main() -> ! {
 
     let rcc = &dp.RCC;
     let gpioa = &dp.GPIOA;
-    let usart2 = &dp.USART2;
     let spi1 = &dp.SPI1;
 
-    configure_usart2_debugger(rcc, gpioa, usart2);
+    let mut usart_debugger = UsartDebugger::new(rcc, gpioa, dp.USART2);
 
     configure_st7735_display(rcc, gpioa, spi1);
 
@@ -327,7 +290,7 @@ fn main() -> ! {
 
     configure_ov7670_camera();
 
-    debug_print(usart2, "Hello World\r\n");
+    write!(usart_debugger, "Hello World\r\n").unwrap();
 
     const COLOR_RED: u32 = 0xFF0000;
     const COLOR_GREEN: u32 = 0x00FF00;
