@@ -92,10 +92,10 @@ fn display_rs_data_mode(gpioa : &stm32f401::GPIOA) {
     gpioa.bsrr.write(|w| w.bs4().set_bit()); //=1
 }
 
-fn clear_display(
-    gpioa : &stm32f401::GPIOA,
-    spi1 : &stm32f401::SPI1,
-    usart2 : &stm32f401::USART2
+fn fill_display(
+    gpioa: &stm32f401::GPIOA,
+    spi1: &stm32f401::SPI1,
+    color: Option<u32>
 ) {
     const WIDTH: u8 = 128;
     const HEIGHT: u8 = 160;
@@ -103,6 +103,10 @@ fn clear_display(
     const CASET: u8 = 0x2A;
     const RASET: u8 = 0x2B;
     const RAMWR: u8 = 0x2C;
+
+    const WHITE: u32 = 0xFFFFFF;
+
+    let color = color.unwrap_or(WHITE);
 
     display_cs_enable(gpioa);
 
@@ -137,51 +141,12 @@ fn clear_display(
     spi1_write(spi1, RAMWR);
     display_rs_data_mode(gpioa);
 
-    // Fill the display in with white
+    // Fill in display
     for _ in 0..HEIGHT {
         for _ in 0..WIDTH {
-            spi1_write(spi1, 0xFF);
-            spi1_write(spi1, 0xFF);
-            spi1_write(spi1, 0xFF);
-        }
-    }
-
-    // TESTING Color lop
-    loop {
-        // Slowly draw to the display
-        for _ in 0..HEIGHT {
-            for _ in 0..WIDTH {
-                spi1_write(spi1, 0x00); // R
-                spi1_write(spi1, 0x00); // G
-                spi1_write(spi1, 0xFF); // B
-                // asm::delay(CLK_HZ/1000); // ~1ms
-            }
-            debug_print(usart2, "ROW\r\n");
-            // asm::delay(CLK_HZ/10); // ~100ms
-        }
-
-        // Slowly draw to the display
-        for _ in 0..HEIGHT {
-            for _ in 0..WIDTH {
-                spi1_write(spi1, 0x00); // R
-                spi1_write(spi1, 0xFF); // G
-                spi1_write(spi1, 0x00); // B
-                // asm::delay(CLK_HZ/1000); // ~1ms
-            }
-            debug_print(usart2, "ROW\r\n");
-            // asm::delay(CLK_HZ/10); // ~100ms
-        }
-
-        // Slowly draw to the display
-        for _ in 0..HEIGHT {
-            for _ in 0..WIDTH {
-                spi1_write(spi1, 0xFF); // R
-                spi1_write(spi1, 0x00); // G
-                spi1_write(spi1, 0x00); // B
-                // asm::delay(CLK_HZ/1000); // ~1ms
-            }
-            debug_print(usart2, "ROW\r\n");
-            // asm::delay(CLK_HZ/10); // ~100ms
+            spi1_write(spi1, ((color >> 16) & 0xFF) as u8); // R
+            spi1_write(spi1, ((color >> 8) & 0xFF) as u8); // G
+            spi1_write(spi1, (color & 0xFF) as u8); // B
         }
     }
 
@@ -227,8 +192,7 @@ fn calibrate_display(
 fn configure_st7735_display(
     rcc: &stm32f401::RCC,
     gpioa: &stm32f401::GPIOA,
-    spi1: &stm32f401::SPI1,
-    usart2 : &stm32f401::USART2
+    spi1: &stm32f401::SPI1
 ) {
     /*
         ST7735 Display
@@ -311,10 +275,7 @@ fn configure_st7735_display(
 
     calibrate_display(gpioa, spi1);
 
-    asm::delay(CLK_HZ / 2); // 500ms
-
-    clear_display(gpioa, spi1, usart2); // TODO: move this
-    asm::delay(CLK_HZ * 3); // TESTING
+    fill_display(gpioa, spi1, None); // TODO: move this
 }
 
 fn configure_microsd_interface() {
@@ -372,18 +333,21 @@ fn main() -> ! {
 
     configure_usart2_debugger(rcc, gpioa, usart2);
 
-    debug_print(usart2, "\r\n"); // DEBUG
-
-    configure_st7735_display(rcc, gpioa, spi1, usart2);
+    configure_st7735_display(rcc, gpioa, spi1);
 
     configure_microsd_interface();
 
     configure_ov7670_camera();
 
-    loop {
-        debug_print(usart2, "Hello World\r\n");
+    debug_print(usart2, "Hello World\r\n");
 
-        // ~1s delay
-        asm::delay(CLK_HZ);
+    const COLOR_RED: u32 = 0xFF0000;
+    const COLOR_GREEN: u32 = 0x00FF00;
+    const COLOR_BLUE: u32 = 0x0000FF;
+
+    loop {
+        fill_display(gpioa, spi1, Some(COLOR_RED));
+        fill_display(gpioa, spi1, Some(COLOR_GREEN));
+        fill_display(gpioa, spi1, Some(COLOR_BLUE));
     }
 }
