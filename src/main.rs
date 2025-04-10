@@ -11,7 +11,7 @@ use panic_halt as _;
 use stm32f4::stm32f401;
 
 use usart_debugger::UsartDebugger;
-use display::Display;
+use display::{Display, ST7735};
 
 fn configure_microsd_interface() {
     /*
@@ -65,7 +65,7 @@ fn main() -> ! {
     let gpioa = &dp.GPIOA;
 
     let mut usart_debugger = UsartDebugger::new(rcc, gpioa, dp.USART2);
-    let display = Display::new(rcc, gpioa, dp.SPI1, 128, 160);
+    let display = ST7735::new(rcc, gpioa, dp.SPI1, 128, 160);
 
     configure_microsd_interface();
 
@@ -73,7 +73,7 @@ fn main() -> ! {
 
     write!(usart_debugger, "Calibrating display\r\n").unwrap();
 
-    display.calibrate_display();
+    display.calibrate();
 
     write!(usart_debugger, "Entering color loop\r\n").unwrap();
 
@@ -82,8 +82,8 @@ fn main() -> ! {
         const COLOR_GREEN: u32 = 0x00FF00;
         const COLOR_BLUE: u32 = 0x0000FF;
 
-        display.fill_display(Some(COLOR_RED));
-        display.fill_display(Some(COLOR_GREEN));
-        display.fill_display(Some(COLOR_BLUE));
+        display.fill(Some(COLOR_RED));
+        display.fill(Some(COLOR_GREEN));
+        display.fill(Some(COLOR_BLUE));
     }
 }

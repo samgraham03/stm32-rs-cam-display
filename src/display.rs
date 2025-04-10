@@ -21,70 +21,24 @@ use super::constants::CLK_HZ;
     CS |PA0|Chip Select (GPIO)
 */
 
-pub struct Display<'a> {
+pub trait Display {
+
+    /// Setup and turn on the display
+    fn calibrate(&self);
+
+    /// Fill in the display with a solid color
+    fn fill(&self, color: Option<u32>);
+}
+
+pub struct ST7735<'a> {
     spi: stm32f401::SPI1,
     gpio: &'a stm32f401::GPIOA,
     width: u32,
     height: u32
 }
 
-impl<'a> Display<'a> {
-
-    pub fn new(
-        rcc: &stm32f401::RCC,
-        gpioa: &'a stm32f401::GPIOA,
-        spi1: stm32f401::SPI1,
-        width: u32,
-        height: u32
-    ) -> Self {
-
-        // Enable GPIOA clock
-        rcc.ahb1enr.modify(|_, w| w.gpioaen().enabled());
-
-        // Configure output pins
-        gpioa.moder.modify(|_, w| {
-            w.moder0().output() // CS
-             .moder1().output() // RST
-             .moder4().output() // RS
-        });
-
-        // Enable SPI1 clock
-        rcc.apb2enr.modify(|_, w| w.spi1en().enabled());
-
-        // Configure SPI pins
-        gpioa.moder.modify(|_, w| {
-            w.moder5().alternate() // CLK
-             .moder7().alternate() // SDA
-        });
-
-        // Set SPI pin alternate functions
-        gpioa.afrl.modify(|_, w| {
-            w.afrl5().af5() // SPI1_SCK
-             .afrl7().af5() // SPI1_MOSI
-        });
-
-        // Configure SPI1
-        spi1.cr1.modify(|_, w| {
-            w.bidimode().clear_bit()
-             .bidioe().clear_bit()
-             .rxonly().clear_bit()
-             .dff().clear_bit()
-             .lsbfirst().clear_bit()
-             .ssm().set_bit()
-             .ssi().set_bit()
-             .mstr().set_bit()
-             .br().div8()
-             .cpol().clear_bit()
-             .cpha().clear_bit()
-        });
-
-        // Enable SPI1
-        spi1.cr1.modify(|_, w| w.spe().set_bit());
-
-        Display { spi: spi1, gpio: gpioa, width, height }
-    }
-
-    pub fn calibrate_display(&self) {
+impl<'a> Display for ST7735<'a> {
+    fn calibrate(&self) {
         const SWRESET: u8 = 0x01;
         const SLPOUT: u8 = 0x11;
         const DISPON: u8 = 0x29;
@@ -128,10 +82,10 @@ impl<'a> Display<'a> {
         asm::delay(CLK_HZ / 1000 * 120); // ~120ms
 
         // Clear display
-        self.fill_display(None);
+        self.fill(None);
     }
 
-    pub fn fill_display(&self, color: Option<u32>) {
+    fn fill(&self, color: Option<u32>) {
         const CASET: u8 = 0x2A;
         const RASET: u8 = 0x2B;
         const RAMWR: u8 = 0x2C;
@@ -185,6 +139,62 @@ impl<'a> Display<'a> {
 
         self.display_rs_command_mode();
         self.display_cs_disable();
+    }
+}
+
+impl<'a> ST7735<'a> {
+    pub fn new(
+        rcc: &stm32f401::RCC,
+        gpioa: &'a stm32f401::GPIOA,
+        spi1: stm32f401::SPI1,
+        width: u32,
+        height: u32
+    ) -> Self {
+
+        // Enable GPIOA clock
+        rcc.ahb1enr.modify(|_, w| w.gpioaen().enabled());
+
+        // Configure output pins
+        gpioa.moder.modify(|_, w| {
+            w.moder0().output() // CS
+             .moder1().output() // RST
+             .moder4().output() // RS
+        });
+
+        // Enable SPI1 clock
+        rcc.apb2enr.modify(|_, w| w.spi1en().enabled());
+
+        // Configure SPI pins
+        gpioa.moder.modify(|_, w| {
+            w.moder5().alternate() // CLK
+             .moder7().alternate() // SDA
+        });
+
+        // Set SPI pin alternate functions
+        gpioa.afrl.modify(|_, w| {
+            w.afrl5().af5() // SPI1_SCK
+             .afrl7().af5() // SPI1_MOSI
+        });
+
+        // Configure SPI1
+        spi1.cr1.modify(|_, w| {
+            w.bidimode().clear_bit()
+             .bidioe().clear_bit()
+             .rxonly().clear_bit()
+             .dff().clear_bit()
+             .lsbfirst().clear_bit()
+             .ssm().set_bit()
+             .ssi().set_bit()
+             .mstr().set_bit()
+             .br().div8()
+             .cpol().clear_bit()
+             .cpha().clear_bit()
+        });
+
+        // Enable SPI1
+        spi1.cr1.modify(|_, w| w.spe().set_bit());
+
+        ST7735 { spi: spi1, gpio: gpioa, width, height }
     }
 
     fn spi1_write(&self, byte: u8) {
