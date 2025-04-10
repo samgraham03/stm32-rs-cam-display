@@ -3,6 +3,18 @@ use stm32f4::stm32f401;
 
 use super::constants::CLK_HZ;
 
+#[derive(Copy, Clone)]
+pub enum PinState {
+    Enable,
+    Disable
+}
+
+#[derive(Copy, Clone)]
+pub enum ControlMode {
+    Data,
+    Command
+}
+
 /*
     ST7735 Display
 
@@ -47,38 +59,29 @@ impl<'a> Display for ST7735<'a> {
         // * Setting COLMOD to 16-bit RGB with a display that supports it
         // * Clearing display ram before turning on display
 
-        // Disable Chip Select (CS)
-        self.display_cs_disable();
+        // CS not needed for hardware reset
+        self.chip_select(PinState::Disable);
 
-        // Enable Reset (RST)
-        self.display_rst_enable();
+        // Reset display
+        self.reset(PinState::Enable);
+        asm::delay(CLK_HZ / 1000 * 120); // ~120ms
+        self.reset(PinState::Disable);
+        asm::delay(CLK_HZ / 1000 * 120); // ~120ms
 
-        // ~120ms delay
-        asm::delay(CLK_HZ / 1000 * 120);
-
-        // Disable Reset (RST)
-        self.display_rst_disable();
-
-        // Put Register Select (RS) into command mode
-        self.display_rs_command_mode();
-
-        // ~120ms delay
-        asm::delay(CLK_HZ / 1000 * 120);
-
-        self.display_cs_enable();
+        self.chip_select(PinState::Enable);
 
         // Software reset
-        self.display_rs_command_mode();
-        self.spi1_write(SWRESET);
+        self.register_select(ControlMode::Command);
+        self.spi_write(SWRESET);
         asm::delay(CLK_HZ / 1000 * 120); // ~120ms
 
         // Wake up display (from reset sleep)
-        self.spi1_write(SLPOUT);
+        self.spi_write(SLPOUT);
         asm::delay(CLK_HZ / 1000 * 120); // ~120ms
 
         // Turn on the display
-        self.display_rs_command_mode();
-        self.spi1_write(DISPON);
+        self.register_select(ControlMode::Command);
+        self.spi_write(DISPON);
         asm::delay(CLK_HZ / 1000 * 120); // ~120ms
 
         // Clear display
@@ -95,50 +98,50 @@ impl<'a> Display for ST7735<'a> {
 
         let color = color.unwrap_or(WHITE);
 
-        self.display_cs_enable();
+        self.chip_select(PinState::Enable);
 
         // Draw sequence fails without this
-        self.display_rs_command_mode();
-        self.spi1_write(NOP);
+        self.register_select(ControlMode::Command);
+        self.spi_write(NOP);
 
         // Set column range
-        self.display_rs_command_mode();
-        self.spi1_write(CASET);
-        self.display_rs_data_mode();
+        self.register_select(ControlMode::Command);
+        self.spi_write(CASET);
+        self.register_select(ControlMode::Data);
         // Set x0
-        self.spi1_write(0x00); // MSB
-        self.spi1_write(0x00); // LSB
+        self.spi_write(0x00); // MSB
+        self.spi_write(0x00); // LSB
         // Set x1
-        self.spi1_write(0x00); // MSB
-        self.spi1_write((self.width - 1) as u8); // LSB
+        self.spi_write(0x00); // MSB
+        self.spi_write((self.width - 1) as u8); // LSB
 
         // Set row range
-        self.display_rs_command_mode();
-        self.spi1_write(RASET);
-        self.display_rs_data_mode();
+        self.register_select(ControlMode::Command);
+        self.spi_write(RASET);
+        self.register_select(ControlMode::Data);
         // Set y0
-        self.spi1_write(0x00); // MSB
-        self.spi1_write(0x00); // LSB
+        self.spi_write(0x00); // MSB
+        self.spi_write(0x00); // LSB
         // Set y1
-        self.spi1_write(0x00); // MSB
-        self.spi1_write((self.height - 1) as u8); // LSB
+        self.spi_write(0x00); // MSB
+        self.spi_write((self.height - 1) as u8); // LSB
 
         // Write to the display
-        self.display_rs_command_mode();
-        self.spi1_write(RAMWR);
-        self.display_rs_data_mode();
+        self.register_select(ControlMode::Command);
+        self.spi_write(RAMWR);
+        self.register_select(ControlMode::Data);
 
         // Fill in display
         for _ in 0..self.height {
             for _ in 0..self.width {
-                self.spi1_write(((color >> 16) & 0xFF) as u8); // R
-                self.spi1_write(((color >> 8) & 0xFF) as u8); // G
-                self.spi1_write((color & 0xFF) as u8); // B
+                self.spi_write(((color >> 16) & 0xFF) as u8); // R
+                self.spi_write(((color >> 8) & 0xFF) as u8); // G
+                self.spi_write((color & 0xFF) as u8); // B
             }
         }
 
-        self.display_rs_command_mode();
-        self.display_cs_disable();
+        self.register_select(ControlMode::Command);
+        self.chip_select(PinState::Disable);
     }
 }
 
@@ -197,7 +200,7 @@ impl<'a> ST7735<'a> {
         ST7735 { spi: spi1, gpio: gpioa, width, height }
     }
 
-    fn spi1_write(&self, byte: u8) {
+    fn spi_write(&self, byte: u8) {
         // Wait for TX buffer to be empty
         while self.spi.sr.read().txe().bit_is_clear() {}
 
@@ -207,27 +210,24 @@ impl<'a> ST7735<'a> {
         while self.spi.sr.read().bsy().bit_is_set() {}
     }
 
-    fn display_rst_enable(&self) {
-        self.gpio.bsrr.write(|w| w.br1().set_bit());
+    fn reset(&self, state: PinState) {
+        match state {
+            PinState::Enable => self.gpio.bsrr.write(|w| w.br1().set_bit()),
+            PinState::Disable => self.gpio.bsrr.write(|w| w.bs1().set_bit())
+        }
     }
 
-    fn display_rst_disable(&self) {
-        self.gpio.bsrr.write(|w| w.bs1().set_bit());
+    fn chip_select(&self, state: PinState) {
+        match state {
+            PinState::Enable => self.gpio.bsrr.write(|w| w.br0().set_bit()),
+            PinState::Disable => self.gpio.bsrr.write(|w| w.bs0().set_bit())
+        }
     }
 
-    fn display_cs_enable(&self) {
-        self.gpio.bsrr.write(|w| w.br0().set_bit());
-    }
-
-    fn display_cs_disable(&self) {
-        self.gpio.bsrr.write(|w| w.bs0().set_bit());
-    }
-
-    fn display_rs_command_mode(&self) {
-        self.gpio.bsrr.write(|w| w.br4().set_bit());
-    }
-
-    fn display_rs_data_mode(&self) {
-        self.gpio.bsrr.write(|w| w.bs4().set_bit());
+    fn register_select(&self, mode: ControlMode) {
+        match mode {
+            ControlMode::Data => self.gpio.bsrr.write(|w| w.bs4().set_bit()),
+            ControlMode::Command => self.gpio.bsrr.write(|w| w.br4().set_bit())
+        }
     }
 }
