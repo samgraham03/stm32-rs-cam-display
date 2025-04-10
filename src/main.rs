@@ -3,232 +3,15 @@
 
 mod constants;
 mod usart_debugger;
+mod display;
 
 use core::fmt::Write;
-use cortex_m::asm;
 use cortex_m_rt::entry;
 use panic_halt as _;
 use stm32f4::stm32f401;
 
-use constants::CLK_HZ;
 use usart_debugger::UsartDebugger;
-
-fn spi1_write(spi1: &stm32f401::SPI1, byte: u8) {
-    // Wait for TX buffer to be empty
-    while spi1.sr.read().txe().bit_is_clear() {}
-
-    spi1.dr.write(|w| w.dr().bits(byte.into()));
-
-    // Wait for SPI to be busy (TX started)
-    while spi1.sr.read().bsy().bit_is_set() {}
-}
-
-// TODO: Display module
-// RST: enable=0, disable=1
-fn display_rst_enable(gpioa : &stm32f401::GPIOA) {
-    gpioa.bsrr.write(|w| w.br1().set_bit()); //=0
-}
-fn display_rst_disable(gpioa : &stm32f401::GPIOA) {
-    gpioa.bsrr.write(|w| w.bs1().set_bit()); //=1
-}
-// CS: enable=0, disable=1
-fn display_cs_enable(gpioa : &stm32f401::GPIOA) {
-    gpioa.bsrr.write(|w| w.br0().set_bit()); //=0
-}
-fn display_cs_disable(gpioa : &stm32f401::GPIOA) {
-    gpioa.bsrr.write(|w| w.bs0().set_bit()); //=1
-}
-// RS: cmd=1, data=0
-fn display_rs_command_mode(gpioa : &stm32f401::GPIOA) {
-    // gpioa.bsrr.write(|w| w.bs4().set_bit()); //=1
-    gpioa.bsrr.write(|w| w.br4().set_bit()); //=0
-}
-fn display_rs_data_mode(gpioa : &stm32f401::GPIOA) {
-    // gpioa.bsrr.write(|w| w.br4().set_bit()); //=0
-    gpioa.bsrr.write(|w| w.bs4().set_bit()); //=1
-}
-
-fn fill_display(
-    gpioa: &stm32f401::GPIOA,
-    spi1: &stm32f401::SPI1,
-    color: Option<u32>
-) {
-    const WIDTH: u8 = 128;
-    const HEIGHT: u8 = 160;
-
-    const CASET: u8 = 0x2A;
-    const RASET: u8 = 0x2B;
-    const RAMWR: u8 = 0x2C;
-    const NOP: u8 = 0x00;
-
-    const WHITE: u32 = 0xFFFFFF;
-
-    let color = color.unwrap_or(WHITE);
-
-    display_cs_enable(gpioa);
-
-    // Draw sequence fails without this
-    display_rs_command_mode(gpioa);
-    spi1_write(spi1, NOP);
-
-    // Set column range
-    display_rs_command_mode(gpioa);
-    spi1_write(spi1, CASET);
-    display_rs_data_mode(gpioa);
-    // Set x0
-    spi1_write(spi1, 0x00); // MSB
-    spi1_write(spi1, 0x00); // LSB
-    // Set x1
-    spi1_write(spi1, 0x00); // MSB
-    spi1_write(spi1, (WIDTH - 1) as u8); // LSB
-
-    // Set row range
-    display_rs_command_mode(gpioa);
-    spi1_write(spi1, RASET);
-    display_rs_data_mode(gpioa);
-    // Set y0
-    spi1_write(spi1, 0x00); // MSB
-    spi1_write(spi1, 0x00); // LSB
-    // Set y1
-    spi1_write(spi1, 0x00); // MSB
-    spi1_write(spi1, (HEIGHT - 1) as u8); // LSB
-
-    // Write to the display
-    display_rs_command_mode(gpioa);
-    spi1_write(spi1, RAMWR);
-    display_rs_data_mode(gpioa);
-
-    // Fill in display
-    for _ in 0..HEIGHT {
-        for _ in 0..WIDTH {
-            spi1_write(spi1, ((color >> 16) & 0xFF) as u8); // R
-            spi1_write(spi1, ((color >> 8) & 0xFF) as u8); // G
-            spi1_write(spi1, (color & 0xFF) as u8); // B
-        }
-    }
-
-    display_rs_command_mode(gpioa);
-    display_cs_disable(gpioa);
-}
-
-fn calibrate_display(
-    gpioa: &stm32f401::GPIOA,
-    spi1: &stm32f401::SPI1
-) {
-    const SWRESET: u8 = 0x01;
-    const SLPOUT: u8 = 0x11;
-    const DISPON: u8 = 0x29;
-
-    // TODO: COLMOD 16-bit RGB with a display that supports it
-
-    display_cs_enable(gpioa);
-
-    // Software reset
-    display_rs_command_mode(gpioa);
-    spi1_write(spi1, SWRESET);
-    asm::delay(CLK_HZ / 1000 * 120); // ~120ms
-
-    // Wake up display (from reset sleep)
-    spi1_write(spi1, SLPOUT);
-    asm::delay(CLK_HZ / 1000 * 120); // ~120ms
-
-    // Turn on the display
-    display_rs_command_mode(gpioa);
-    spi1_write(spi1, DISPON);
-    asm::delay(CLK_HZ / 1000 * 120); // ~120ms
-
-    display_cs_disable(gpioa);
-}
-
-fn configure_st7735_display(
-    rcc: &stm32f401::RCC,
-    gpioa: &stm32f401::GPIOA,
-    spi1: &stm32f401::SPI1
-) {
-    /*
-        ST7735 Display
-
-        CON|PIN|NOTE
-        ============
-        VCC|3.3|
-        GND|GND|
-        GND|GND|
-        NC |   |
-        NC |   |
-        NC |   |
-        CLK|PA5|SPI1_SCK
-        SDA|PA7|SPI1_MOSI
-        RS |PA4|Data/Command select (GPIO)
-        RST|PA1|Reset line (GPIO)
-        CS |PA0|Chip Select (GPIO)
-    */
-
-    // Enable GPIOA clock
-    rcc.ahb1enr.modify(|_, w| w.gpioaen().enabled());
-
-    // Configure output pins
-    gpioa.moder.modify(|_, w| {
-        w.moder0().output() // CS
-         .moder1().output() // RST
-         .moder4().output() // RS
-    });
-
-    // Disable Chip Select (CS)
-    display_cs_disable(gpioa);
-
-    // Enable Reset (RST)
-    display_rst_enable(gpioa);
-
-    // ~120ms delay
-    asm::delay(CLK_HZ / 1000 * 120);
-
-    // Disable Reset (RST)
-    display_rst_disable(gpioa);
-
-    // Put Register Select (RS) into command mode
-    display_rs_command_mode(gpioa);
-
-    // ~120ms delay
-    asm::delay(CLK_HZ / 1000 * 120);
-
-    // Enable SPI1 clock
-    rcc.apb2enr.modify(|_, w| w.spi1en().enabled());
-
-    // Configure SPI pins
-    gpioa.moder.modify(|_, w| {
-        w.moder5().alternate() // CLK
-         .moder7().alternate() // SDA
-    });
-
-    // Set SPI pin alternate functions
-    gpioa.afrl.modify(|_, w| {
-        w.afrl5().af5() // SPI1_SCK
-         .afrl7().af5() // SPI1_MOSI
-    });
-
-    // Configure SPI1
-    spi1.cr1.modify(|_, w| {
-        w.bidimode().clear_bit()
-         .bidioe().clear_bit()
-         .rxonly().clear_bit()
-         .dff().clear_bit()
-         .lsbfirst().clear_bit()
-         .ssm().set_bit()
-         .ssi().set_bit()
-         .mstr().set_bit()
-         .br().div8()
-         .cpol().clear_bit()
-         .cpha().clear_bit()
-    });
-
-    // Enable SPI1
-    spi1.cr1.modify(|_, w| w.spe().set_bit());
-
-    calibrate_display(gpioa, spi1);
-
-    // Clear display
-    fill_display(gpioa, spi1, None);
-}
+use display::Display;
 
 fn configure_microsd_interface() {
     /*
@@ -280,25 +63,27 @@ fn main() -> ! {
 
     let rcc = &dp.RCC;
     let gpioa = &dp.GPIOA;
-    let spi1 = &dp.SPI1;
 
     let mut usart_debugger = UsartDebugger::new(rcc, gpioa, dp.USART2);
-
-    configure_st7735_display(rcc, gpioa, spi1);
+    let display = Display::new(rcc, gpioa, dp.SPI1, 128, 160);
 
     configure_microsd_interface();
 
     configure_ov7670_camera();
 
-    write!(usart_debugger, "Hello World\r\n").unwrap();
+    write!(usart_debugger, "Calibrating display\r\n").unwrap();
 
-    const COLOR_RED: u32 = 0xFF0000;
-    const COLOR_GREEN: u32 = 0x00FF00;
-    const COLOR_BLUE: u32 = 0x0000FF;
+    display.calibrate_display();
+
+    write!(usart_debugger, "Entering color loop\r\n").unwrap();
 
     loop {
-        fill_display(gpioa, spi1, Some(COLOR_RED));
-        fill_display(gpioa, spi1, Some(COLOR_GREEN));
-        fill_display(gpioa, spi1, Some(COLOR_BLUE));
+        const COLOR_RED: u32 = 0xFF0000;
+        const COLOR_GREEN: u32 = 0x00FF00;
+        const COLOR_BLUE: u32 = 0x0000FF;
+
+        display.fill_display(Some(COLOR_RED));
+        display.fill_display(Some(COLOR_GREEN));
+        display.fill_display(Some(COLOR_BLUE));
     }
 }
