@@ -28,16 +28,21 @@ use stm32f4::stm32f401;
 pub struct OV7670<'a> {
     gpioa: &'a stm32f401::GPIOA,
     gpiob: &'a stm32f401::GPIOB,
-    gpioc: &'a stm32f401::GPIOC
+    gpioc: &'a stm32f401::GPIOC,
+    i2c1: stm32f401::I2C1
 }
 
 impl<'a> OV7670<'a> {
+
+    const HSI_HZ: usize = 16_000_000;
+    const SCL_HZ: usize = 100_000;
 
     pub fn new(
         rcc: &stm32f401::RCC,
         gpioa: &'a stm32f401::GPIOA,
         gpiob: &'a stm32f401::GPIOB,
-        gpioc: &'a stm32f401::GPIOC
+        gpioc: &'a stm32f401::GPIOC,
+        i2c1: stm32f401::I2C1
     ) -> Self {
 
         // Enable GPIOA, GPIOB, GPIOC clocks
@@ -102,6 +107,32 @@ impl<'a> OV7670<'a> {
              .mco1pre().div1()
         });
 
-        OV7670 { gpioa, gpiob, gpioc }
+        // Enable I2C1 clock
+        rcc.apb1enr.modify(|_, w| w.i2c1en().enabled());
+
+        // Specify I2C1 input clock frequency for timing
+        i2c1.cr2.modify(|_, w| unsafe { w.freq().bits((OV7670::HSI_HZ / 1_000_000) as u8) });
+
+        // CCR = CLK / (2 × SCL)
+        const CCR: usize = OV7670::HSI_HZ / (2 * OV7670::SCL_HZ);
+
+        // Configure I2C1_SCL in standard mode (100KHz)
+        i2c1.ccr.modify(|_, w| unsafe {
+            w.f_s().clear_bit();
+            w.ccr().bits(CCR as u16)
+        });
+
+        // trise = CLK[MHz] + 1 (standard mode)
+        const TRISE: usize = OV7670::HSI_HZ / 1_000_000 + 1;
+
+        // Configure I2C rise time
+        i2c1.trise.modify(|_, w|
+            w.trise().bits(TRISE as u8)
+        );
+
+        // Enable I2C1
+        i2c1.cr1.modify(|_, w| w.pe().enabled());
+
+        OV7670 { gpioa, gpiob, gpioc, i2c1 }
     }
 }

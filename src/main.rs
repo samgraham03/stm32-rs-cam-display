@@ -28,7 +28,7 @@ fn main() -> ! {
 
     let display = ST7735::new(rcc, gpioa, dp.SPI1, 128, 160);
 
-    let camera = OV7670::new(rcc, gpioa, gpiob, gpioc);
+    let camera = OV7670::new(rcc, gpioa, gpiob, gpioc, dp.I2C1);
 
     write!(usart_debugger, "Calibrating display\r\n").unwrap();
 
