@@ -13,7 +13,7 @@ use stm32f4::stm32f401;
 
 use usart_debugger::UsartDebugger;
 use display::{Display, ST7735};
-use camera::{OV7670};
+use camera::OV7670;
 
 #[entry]
 fn main() -> ! {
@@ -31,8 +31,15 @@ fn main() -> ! {
     let camera = OV7670::new(rcc, gpioa, gpiob, gpioc, dp.I2C1);
 
     write!(usart_debugger, "Calibrating display\r\n").unwrap();
-
     display.calibrate();
+
+
+    const PID_ADDR: u8 = 0x0A;
+
+    let rv: u8 = camera.sccb_read(PID_ADDR);
+
+    write!(usart_debugger, "OV7670 PID: 0x{:02X}\r\n", rv).unwrap();
+
 
     write!(usart_debugger, "Entering color loop\r\n").unwrap();
 

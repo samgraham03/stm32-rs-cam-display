@@ -1,5 +1,7 @@
 use stm32f4::stm32f401;
 
+use cortex_m::asm;
+
 /*
     OV7670 Camera
 
@@ -36,6 +38,8 @@ impl<'a> OV7670<'a> {
 
     const HSI_HZ: usize = 16_000_000;
     const SCL_HZ: usize = 100_000;
+
+    const I2C_ADDR: u8 = 0x21;
 
     pub fn new(
         rcc: &stm32f401::RCC,
@@ -134,5 +138,97 @@ impl<'a> OV7670<'a> {
         i2c1.cr1.modify(|_, w| w.pe().enabled());
 
         OV7670 { gpioa, gpiob, gpioc, i2c1 }
+    }
+
+    // Restore I2C bus to IDLE state
+    #[allow(dead_code)]
+    fn flush_i2c_bus(&self) {
+
+        // Re-configure SCL and SDA as outputs
+        self.gpiob.moder.modify(|_, w| {
+            w.moder8().output()
+             .moder9().output()
+        });
+
+        // Attempt to put the bus into the IDLE state (SCL & SDA high)
+        self.gpiob.bsrr.write(|w| {
+            w.bs8().set_bit()
+             .bs9().set_bit()
+        });
+
+        // Manually flush the bus if OV7670 is still driving SDA low
+        for _ in 0..9 {
+
+            // If SDA is high, the bus is flushed
+            if self.gpiob.idr.read().idr9().bit_is_set() {
+                break;
+            }
+
+            self.gpiob.bsrr.write(|w| w.br8().set_bit()); // SCL low
+            asm::delay(1000);
+
+            self.gpiob.bsrr.write(|w| w.bs8().set_bit()); // SCL high
+            asm::delay(1000);
+        }
+
+        // Generate a manual stop signal (SDA rises while SCL is high)
+        self.gpiob.bsrr.write(|w| w.br9().set_bit()); // SDA low
+        asm::delay(1000);
+        self.gpiob.bsrr.write(|w| w.bs8().set_bit()); // SCL high
+        asm::delay(1000);
+        self.gpiob.bsrr.write(|w| w.bs9().set_bit()); // SDA high
+        asm::delay(1000);
+
+        // Restore SCL as I2C1_SCL
+        self.gpiob.moder.modify(|_, w| w.moder8().alternate());
+        self.gpiob.afrh.modify(|_, w| w.afrh8().af4());
+
+        // Restore SDA as I2C1_SDA
+        self.gpiob.moder.modify(|_, w| w.moder9().alternate());
+        self.gpiob.afrh.modify(|_, w| w.afrh9().af4());
+    }
+
+    // Issue a register read on the OV7670
+    pub fn sccb_read(&self, addr: u8) -> u8 {
+
+        const READ: u8 = 0x1;
+        const WRITE: u8 = 0x0;
+
+        // Send start signal
+        self.i2c1.cr1.modify(|_, w| w.start().set_bit());
+        while self.i2c1.sr1.read().sb().bit_is_clear() {}
+
+        // Enable OV7670 write mode
+        self.i2c1.dr.write(|w| w.dr().bits((OV7670::I2C_ADDR << 1) | WRITE));
+        while self.i2c1.sr1.read().addr().bit_is_clear() {}
+        self.i2c1.sr2.read().bits(); // Read to clear addr sent flag
+
+        // Write the register address to the bus
+        self.i2c1.dr.write(|w| w.dr().bits(addr));
+        while self.i2c1.sr1.read().btf().bit_is_clear() {}
+
+        // Send stop signal
+        self.i2c1.cr1.modify(|_, w| w.stop().set_bit());
+
+        // Send start signal
+        self.i2c1.cr1.modify(|_, w| w.start().set_bit());
+        while self.i2c1.sr1.read().sb().bit_is_clear() {}
+
+        // Enable OV7670 read mode
+        self.i2c1.dr.write(|w| w.dr().bits((OV7670::I2C_ADDR << 1) | READ));
+        while self.i2c1.sr1.read().addr().bit_is_clear() {}
+        self.i2c1.sr2.read().bits(); // Read to clear addr sent flag
+
+        // NACK next byte, send stop signal
+        self.i2c1.cr1.modify(|_, w| {
+            w.ack().clear_bit()
+             .stop().set_bit()
+        });
+
+        // Wait for data to be ready
+        while self.i2c1.sr1.read().rx_ne().bit_is_clear() {}
+
+        // Read data
+        self.i2c1.dr.read().dr().bits()
     }
 }
