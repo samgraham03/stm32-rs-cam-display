@@ -231,4 +231,30 @@ impl<'a> OV7670<'a> {
         // Read data
         self.i2c1.dr.read().dr().bits()
     }
+
+    // Issue a register write on the OV7670
+    pub fn sccb_write(&self, addr: u8, data: u8) {
+
+        const WRITE: u8 = 0x0;
+
+        // Send start signal
+        self.i2c1.cr1.modify(|_, w| w.start().set_bit());
+        while self.i2c1.sr1.read().sb().bit_is_clear() {}
+
+        // Enable OV7670 write mode
+        self.i2c1.dr.write(|w| w.dr().bits((OV7670::I2C_ADDR << 1) | WRITE));
+        while self.i2c1.sr1.read().addr().bit_is_clear() {}
+        self.i2c1.sr2.read().bits(); // Read to clear addr sent flag
+
+        // Write the register address to the bus
+        self.i2c1.dr.write(|w| w.dr().bits(addr));
+        while self.i2c1.sr1.read().btf().bit_is_clear() {}
+
+        // Write the data to the bus
+        self.i2c1.dr.write(|w| w.dr().bits(data));
+        while self.i2c1.sr1.read().btf().bit_is_clear() {}
+
+        // Send stop signal
+        self.i2c1.cr1.modify(|_, w| w.stop().set_bit());
+    }
 }
