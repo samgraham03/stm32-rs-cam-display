@@ -2,6 +2,8 @@ use stm32f4::stm32f401;
 
 use cortex_m::asm;
 
+use crate::constants::CLK_HZ;
+
 /*
     OV7670 Camera
 
@@ -27,11 +29,75 @@ use cortex_m::asm;
     PWDN|GND|Power down (unused)
 */
 
+pub trait Camera {
+
+    /// Setup and turn on the camera
+    fn calibrate(&self);
+}
+
 pub struct OV7670<'a> {
     gpioa: &'a stm32f401::GPIOA,
     gpiob: &'a stm32f401::GPIOB,
     gpioc: &'a stm32f401::GPIOC,
     i2c1: stm32f401::I2C1
+}
+
+impl<'a> Camera for OV7670<'a> {
+
+    fn calibrate(&self) {
+
+        const COM7_ADDR: u8 = 0x12;
+        const COM7_RGB_SELECT: u8 = 0x04;
+        const COM7_QVGA_SELECT: u8 = 0x10;
+        const COM7_RESET: u8 = 0x80;
+
+        const CLKRC_ADDR: u8 = 0x11;
+        const CLKRC_PRESCALER: u8 = 0x01; // CLK = CLK_IN/(PRESCALER+1)
+
+        const COM3_ADDR: u8 = 0x0C;
+        const COM3_DCW_EN: u8 = 0x04;
+
+        const COM14_ADDR: u8 = 0x3E;
+        const COM14_MANUAL_SCALE_EN: u8 = 0x08;
+        const COM14_DCW_AND_PCLK_SCALE_EN: u8 = 0x10;
+        const COM14_PCLK_DIVIDER: u8 = 0x01; // Divide by 2
+
+        const SCALING_XSC_ADDR: u8 = 0x70;
+        const SCALING_XSC_HORZ_SCALE_FACTOR: u8 = 0x3A; // Default
+
+        const SCALING_YSC_ADDR: u8 = 0x71;
+        const SCALING_YSC_VERT_SCALE_FACTOR: u8 = 0x35; // Default
+
+        const SCALING_DCWCTR_ADDR: u8 = 0x72;
+        const SCALING_DCWCTR_HORZ_DOWNSAMPLE: u8 = 0x01; // Horizontal downsample by 2
+        const SCALING_DCWCTR_VERT_DOWNSAMPLE: u8 = 0x10; // Vertical downsample by 2
+
+        const SCALING_PCLK_DIV_ADDR: u8 = 0x73;
+        const SCALING_PCLK_DIV_CLOCK_DIVIDER: u8 = 0x01;
+
+        const SCALING_PCLK_DELAY_ADDR: u8 = 0xA2;
+        const SCALING_PCLK_DELAY_SCALING_OUTPUT_DELAY: u8 = 0x02; // Default
+
+        const COM15_ADDR: u8 = 0x40;
+        const COM15_DATA_FORMAT: u8 = 0xC0; // Full ([00] to [FF])
+        const COM15_RGB_OPTION: u8 = 0x10; // RGB 565
+
+        // Reset all registers to default values
+        self.sccb_write(COM7_ADDR, COM7_RESET); // COM7: reset
+        asm::delay(CLK_HZ / 1000 * 120); // ~120ms
+
+        // Configure OV7670 to use QVGA with downsampling to get 160x120 resolution
+        self.sccb_write(COM7_ADDR, COM7_RGB_SELECT | COM7_QVGA_SELECT);
+        self.sccb_write(CLKRC_ADDR, CLKRC_PRESCALER);
+        self.sccb_write(COM3_ADDR, COM3_DCW_EN);
+        self.sccb_write(COM14_ADDR, COM14_MANUAL_SCALE_EN | COM14_DCW_AND_PCLK_SCALE_EN | COM14_PCLK_DIVIDER);
+        self.sccb_write(SCALING_XSC_ADDR, SCALING_XSC_HORZ_SCALE_FACTOR);
+        self.sccb_write(SCALING_YSC_ADDR, SCALING_YSC_VERT_SCALE_FACTOR);
+        self.sccb_write(SCALING_DCWCTR_ADDR, SCALING_DCWCTR_HORZ_DOWNSAMPLE | SCALING_DCWCTR_VERT_DOWNSAMPLE);
+        self.sccb_write(SCALING_PCLK_DIV_ADDR, SCALING_PCLK_DIV_CLOCK_DIVIDER);
+        self.sccb_write(SCALING_PCLK_DELAY_ADDR, SCALING_PCLK_DELAY_SCALING_OUTPUT_DELAY);
+        self.sccb_write(COM15_ADDR, COM15_DATA_FORMAT | COM15_RGB_OPTION);
+    }
 }
 
 impl<'a> OV7670<'a> {
@@ -189,7 +255,7 @@ impl<'a> OV7670<'a> {
     }
 
     // Issue a register read on the OV7670
-    pub fn sccb_read(&self, addr: u8) -> u8 {
+    fn sccb_read(&self, addr: u8) -> u8 {
 
         const READ: u8 = 0x1;
         const WRITE: u8 = 0x0;
@@ -233,7 +299,7 @@ impl<'a> OV7670<'a> {
     }
 
     // Issue a register write on the OV7670
-    pub fn sccb_write(&self, addr: u8, data: u8) {
+    fn sccb_write(&self, addr: u8, data: u8) {
 
         const WRITE: u8 = 0x0;
 
