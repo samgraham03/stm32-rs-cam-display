@@ -44,12 +44,6 @@ fn main() -> ! {
     write!(usart_debugger, "Entering color loop\r\n").unwrap();
 
     loop {
-        const COLOR_RED: u32 = 0xFF0000;
-        const COLOR_GREEN: u32 = 0x00FF00;
-        const COLOR_BLUE: u32 = 0x0000FF;
-
-        display.fill(Some(COLOR_RED));
-        display.fill(Some(COLOR_GREEN));
-        display.fill(Some(COLOR_BLUE));
+        camera.draw_frame(&display);
     }
 }

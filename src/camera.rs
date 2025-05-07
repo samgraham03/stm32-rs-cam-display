@@ -2,7 +2,7 @@ use stm32f4::stm32f401;
 
 use cortex_m::asm;
 
-use crate::constants::CLK_HZ;
+use crate::{constants::CLK_HZ, display::{ST7735, Display}};
 
 /*
     OV7670 Camera
@@ -20,7 +20,7 @@ use crate::constants::CLK_HZ;
     RET |3.3|Reset (unused)
     DGND|GND|
     SDA |PB9|SCCB data (I2C1_SDA)
-    HS  |PA3|HSync (GPIO)
+    HS  |PB3|HSync (GPIO)
     XCLK|PA8|External clock (MCO_1)
     D6  |PC6|Data[6] (GPIO)
     D4  |PC4|Data[4] (GPIO)
@@ -33,6 +33,8 @@ pub trait Camera {
 
     /// Setup and turn on the camera
     fn calibrate(&self);
+
+    fn draw_frame(&self, display: &ST7735);
 }
 
 pub struct OV7670<'a> {
@@ -73,7 +75,7 @@ impl<'a> Camera for OV7670<'a> {
         const SCALING_DCWCTR_VERT_DOWNSAMPLE: u8 = 0x10; // Vertical downsample by 2
 
         const SCALING_PCLK_DIV_ADDR: u8 = 0x73;
-        const SCALING_PCLK_DIV_CLOCK_DIVIDER: u8 = 0x01;
+        const SCALING_PCLK_DIV_CLOCK_DIVIDER: u8 = 0x01; // Divide by 2
 
         const SCALING_PCLK_DELAY_ADDR: u8 = 0xA2;
         const SCALING_PCLK_DELAY_SCALING_OUTPUT_DELAY: u8 = 0x02; // Default
@@ -97,6 +99,53 @@ impl<'a> Camera for OV7670<'a> {
         self.sccb_write(SCALING_PCLK_DIV_ADDR, SCALING_PCLK_DIV_CLOCK_DIVIDER);
         self.sccb_write(SCALING_PCLK_DELAY_ADDR, SCALING_PCLK_DELAY_SCALING_OUTPUT_DELAY);
         self.sccb_write(COM15_ADDR, COM15_DATA_FORMAT | COM15_RGB_OPTION);
+    }
+
+    fn draw_frame(&self, display: &ST7735) {
+
+        // Wait for new vsync rising edge - start of frame
+        while self.read_vsync() {}
+        while !self.read_vsync() {}
+
+        // RGB 565 buffer
+        let mut buf: [u16; 160] = [0; 160];
+
+        // TODO: dynamically parse rows
+        for y in 0..60 {
+            let mut x = 0;
+
+            // wait for an hsync rising edge - start of row
+            while !self.read_hsync() {};
+
+            while self.read_hsync() {
+
+                // wait for pclk rising edge
+                while !self.read_pclk() {}
+
+                let data_msb: u8 = self.read_data();
+
+                // wait for pclk falling edge
+                while self.read_pclk() {}
+
+                // wait for pclk rising edge
+                while !self.read_pclk() {}
+
+                let data_lsb: u8 = self.read_data();
+
+                // Concat data MSB and LSB
+                let data: u16 = ((data_msb as u16) << 8) | (data_lsb as u16);
+
+                if x < 160 {
+                    buf[x] = data;
+                }
+
+                x += 1;
+
+                while self.read_pclk() {} // wait for fall
+            }
+
+            display.draw_row(y, &buf);
+        }
     }
 }
 
@@ -158,7 +207,7 @@ impl<'a> OV7670<'a> {
         gpioa.moder.modify(|_, w| w.moder6().input());
 
         // Configure HSYNC (GPIO)
-        gpioa.moder.modify(|_, w| w.moder3().input());
+        gpiob.moder.modify(|_, w| w.moder3().input());
 
         // Configure PCLK (GPIO)
         gpioa.moder.modify(|_, w| w.moder9().input());
@@ -322,5 +371,21 @@ impl<'a> OV7670<'a> {
 
         // Send stop signal
         self.i2c1.cr1.modify(|_, w| w.stop().set_bit());
+    }
+
+    fn read_vsync(&self) -> bool {
+        self.gpioa.idr.read().idr6().bit()
+    }
+
+    fn read_hsync(&self) -> bool {
+        self.gpiob.idr.read().idr3().bit()
+    }
+
+    fn read_pclk(&self) -> bool {
+        self.gpioa.idr.read().idr9().bit()
+    }
+
+    fn read_data(&self) -> u8 {
+        self.gpioc.idr.read().bits() as u8
     }
 }

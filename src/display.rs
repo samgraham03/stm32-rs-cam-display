@@ -40,6 +40,8 @@ pub trait Display {
 
     /// Fill in the display with a solid color
     fn fill(&self, color: Option<u32>);
+
+    fn draw_row(&self, row: u32, buf: &[u16]);
 }
 
 pub struct ST7735<'a> {
@@ -50,6 +52,7 @@ pub struct ST7735<'a> {
 }
 
 impl<'a> Display for ST7735<'a> {
+
     fn calibrate(&self) {
         const SWRESET: u8 = 0x01;
         const SLPOUT: u8 = 0x11;
@@ -89,6 +92,7 @@ impl<'a> Display for ST7735<'a> {
     }
 
     fn fill(&self, color: Option<u32>) {
+
         const CASET: u8 = 0x2A;
         const RASET: u8 = 0x2B;
         const RAMWR: u8 = 0x2C;
@@ -143,9 +147,75 @@ impl<'a> Display for ST7735<'a> {
         self.register_select(ControlMode::Command);
         self.chip_select(PinState::Disable);
     }
+
+    // Note: drawing camera "row" here to LCD col since LCD has longer vertical
+    fn draw_row(&self, row: u32, buf: &[u16]) {
+
+        const CASET: u8 = 0x2A;
+        const RASET: u8 = 0x2B;
+        const RAMWR: u8 = 0x2C;
+        const NOP: u8 = 0x00;
+
+        let length = self.width.min(buf.len().try_into().unwrap());
+
+        if length == 0 {
+            return;
+        }
+
+        self.chip_select(PinState::Enable);
+
+        // Draw sequence fails without this
+        self.register_select(ControlMode::Command);
+        self.spi_write(NOP);
+
+        // Set column range
+        self.register_select(ControlMode::Command);
+        self.spi_write(CASET);
+        self.register_select(ControlMode::Data);
+        // Set x0
+        self.spi_write(0x00); // MSB
+        self.spi_write(row as u8); // LSB
+        // Set x1
+        self.spi_write(0x00); // MSB
+        self.spi_write(row as u8); // LSB
+
+        // Set row range
+        self.register_select(ControlMode::Command);
+        self.spi_write(RASET);
+        self.register_select(ControlMode::Data);
+        // Set y0
+        self.spi_write(0x00); // MSB
+        self.spi_write(0x00 as u8); // LSB
+        // Set y1
+        self.spi_write(0x00); // MSB
+        self.spi_write((length - 1) as u8); // LSB
+
+        // Write to the display
+        self.register_select(ControlMode::Command);
+        self.spi_write(RAMWR);
+        self.register_select(ControlMode::Data);
+
+        // Fill in display
+        for i in 0..length {
+            let color = buf[i as usize];
+
+            // Convert RGB 565 to RGB 888
+            let red = ((color >> 11) & 0x1F) << 3;
+            let green = ((color >> 5)  & 0x3F) << 2;
+            let blue = (color & 0x1F) << 3;
+
+            self.spi_write(red as u8);
+            self.spi_write(green as u8);
+            self.spi_write(blue as u8);
+        }
+
+        self.register_select(ControlMode::Command);
+        self.chip_select(PinState::Disable);
+    }
 }
 
 impl<'a> ST7735<'a> {
+
     pub fn new(
         rcc: &stm32f401::RCC,
         gpioa: &'a stm32f401::GPIOA,
