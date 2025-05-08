@@ -84,6 +84,13 @@ impl<'a> Camera for OV7670<'a> {
         const COM15_DATA_FORMAT: u8 = 0xC0; // Full ([00] to [FF])
         const COM15_RGB_OPTION: u8 = 0x10; // RGB 565
 
+        const COM8_ADDR: u8 = 0x13;
+        const COM8_AWB_ENABLE: u8 = 0x02; // Auto white balance
+        const COM8_AEC_ENABLE: u8 = 0x01; // Auto exposure control
+
+        const GAIN_ADDR: u8 = 0x00;
+        const GAIN_AGC: u8 = 0xA0; // [00,FF]
+
         // Reset all registers to default values
         self.sccb_write(COM7_ADDR, COM7_RESET); // COM7: reset
         asm::delay(CLK_HZ / 1000 * 120); // ~120ms
@@ -99,19 +106,23 @@ impl<'a> Camera for OV7670<'a> {
         self.sccb_write(SCALING_PCLK_DIV_ADDR, SCALING_PCLK_DIV_CLOCK_DIVIDER);
         self.sccb_write(SCALING_PCLK_DELAY_ADDR, SCALING_PCLK_DELAY_SCALING_OUTPUT_DELAY);
         self.sccb_write(COM15_ADDR, COM15_DATA_FORMAT | COM15_RGB_OPTION);
+
+        // Apply additionaly tuning to improve image quality
+        self.sccb_write(COM8_ADDR, COM8_AWB_ENABLE | COM8_AEC_ENABLE);
+        self.sccb_write(GAIN_ADDR, GAIN_AGC);
     }
 
     fn draw_frame(&self, display: &ST7735) {
 
-        // Wait for new vsync rising edge - start of frame
-        while self.read_vsync() {}
-        while !self.read_vsync() {}
+        // vsync pulses high before a new frame starts
+        while !self.read_vsync() {} // wait for vsync rising edge
+        while self.read_vsync() {} // wait for vsync falling edge
 
         // RGB 565 buffer
         let mut buf: [u16; 160] = [0; 160];
 
         // TODO: dynamically parse rows
-        for y in 0..60 {
+        for y in 0..80 {
             let mut x = 0;
 
             // wait for an hsync rising edge - start of row
@@ -141,7 +152,7 @@ impl<'a> Camera for OV7670<'a> {
 
                 x += 1;
 
-                while self.read_pclk() {} // wait for fall
+                while self.read_pclk() {} // wait for pclk falling edge
             }
 
             display.draw_row(y, &buf);
